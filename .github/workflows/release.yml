@@ -29,18 +29,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
 
-      - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version=8.11.1
+      - run: bash setup.sh
 
-      - name: Build Release APK
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace --no-daemon
+      - run: ./gradlew assembleRelease --stacktrace --no-daemon
 
       - name: Sign APK
         uses: ilharp/sign-android-release@v1

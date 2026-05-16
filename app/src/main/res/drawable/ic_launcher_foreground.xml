@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Terminal prompt icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,42l12,12l-12,12l-4,-4l8,-8l-8,-8zM54,66h-12v-4h12z" />
+    <!-- Chevron prompt symbol -->
+    <path
+        android:fillColor="#8B5CF6"
+        android:pathData="M30,36h48v36h-48z"
+        android:strokeWidth="2"
+        android:strokeColor="#A78BFA"
+        android:fillAlpha="0.15" />
+    <path
+        android:fillColor="#8B5CF6"
+        android:pathData="M34,40h4v4h-4zM34,48h8v4h-8z"
+        android:fillAlpha="0.3" />
+    <!-- Code brackets -->
+    <path
+        android:fillColor="#60A5FA"
+        android:pathData="M52,38l14,14l-14,14l-3,-3l11,-11l-11,-11z" />
+</vector>
