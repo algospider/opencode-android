@@ -62,7 +62,7 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
       - run: bash setup.sh
       - run: ./gradlew lint --no-daemon
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: lint-report
@@ -93,7 +93,7 @@ jobs:
       - run: bash setup.sh
       - name: Build ${{ matrix.build-type }} APK
         run: ./gradlew assemble${{ matrix.build-type == 'release' && 'Release' || 'Debug' }} --stacktrace --no-daemon
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opencode-android-${{ matrix.build-type }}
           path: app/build/outputs/apk/**/*.apk
@@ -115,7 +115,7 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
       - run: bash setup.sh
       - run: ./gradlew test --no-daemon
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-report
