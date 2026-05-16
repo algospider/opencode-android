@@ -3,8 +3,9 @@ package com.opencode.android.llm
 import com.opencode.android.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,7 +15,6 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.util.UUID
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCancellableCoroutine
 
 class GeminiProvider : LlmProvider {
     private val client = OkHttpClient.Builder()
@@ -30,7 +30,7 @@ class GeminiProvider : LlmProvider {
         tools: List<ToolDef>,
         config: LlmConfig,
         systemPrompt: String
-    ): Flow<StreamEvent.Type> = flow {
+    ): Flow<StreamEvent.Type> = callbackFlow {
         val contents = buildJsonArray {
             messages.filter { it.role != MessageRole.System }.forEach { msg ->
                 add(buildGeminiContent(msg))
@@ -38,7 +38,7 @@ class GeminiProvider : LlmProvider {
         }
 
         val requestBodyObj = buildJsonObject {
-            putJsonArray("contents", contents)
+            put("contents", contents)
 
             if (systemPrompt.isNotBlank()) {
                 putJsonObject("systemInstruction") {
@@ -57,8 +57,7 @@ class GeminiProvider : LlmProvider {
                         putJsonArray("functionDeclarations") {
                             tools.forEach { tool ->
                                 addJsonObject {
-                                    put("name", tool.id)
-                                    put("description", tool.description)
+                                    put("name", tool.id); put("description", tool.description)
                                     put("parameters", tool.parameters)
                                 }
                             }
@@ -91,25 +90,22 @@ class GeminiProvider : LlmProvider {
                         val part = partObj.jsonObject
                         part["text"]?.jsonPrimitive?.contentOrNull?.let { text ->
                             textBuilder.append(text)
-                            trySendBlocking(StreamEvent.Type.TextDelta(text))
+                            trySend(StreamEvent.Type.TextDelta(text))
                         }
                         part["functionCall"]?.jsonObject?.let { fc ->
                             val name = fc["name"]?.jsonPrimitive?.contentOrNull ?: ""
                             val args = fc["args"]?.jsonObject?.toString() ?: "{}"
                             val id = "fc_${UUID.randomUUID().toString().take(8)}"
-                            trySendBlocking(StreamEvent.Type.ToolCallStart(
-                                ToolCall(id, name, args)
-                            ))
-                            trySendBlocking(StreamEvent.Type.ToolCallEnd(
-                                ToolCall(id, name, args)
-                            ))
+                            trySend(StreamEvent.Type.ToolCallStart(ToolCall(id, name, args)))
+                            trySend(StreamEvent.Type.ToolCallEnd(ToolCall(id, name, args)))
                         }
                     }
                 } catch (_: Exception) { }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                trySendBlocking(StreamEvent.Type.Finish("stop"))
+                trySend(StreamEvent.Type.Finish("stop"))
+                channel.close()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
@@ -124,10 +120,13 @@ class GeminiProvider : LlmProvider {
                     }
                     else -> "Unknown error"
                 }
-                trySendBlocking(StreamEvent.Type.Error(msg))
-                trySendBlocking(StreamEvent.Type.Finish("error"))
+                trySend(StreamEvent.Type.Error(msg))
+                trySend(StreamEvent.Type.Finish("error"))
+                channel.close()
             }
         })
+
+        awaitClose { }
     }.flowOn(Dispatchers.IO)
 
     override suspend fun chat(
@@ -143,7 +142,7 @@ class GeminiProvider : LlmProvider {
         }
 
         val requestBodyObj = buildJsonObject {
-            putJsonArray("contents", contents)
+            put("contents", contents)
             if (systemPrompt.isNotBlank()) {
                 putJsonObject("systemInstruction") {
                     putJsonArray("parts") { addJsonObject { put("text", systemPrompt) } }
@@ -160,7 +159,7 @@ class GeminiProvider : LlmProvider {
             .post(requestBodyObj.toString().toRequestBody(mediaType))
             .build()
 
-        return suspendCancellableCoroutine { continuation ->
+        return suspendCancellableCoroutine<String> { continuation ->
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: java.io.IOException) {
                     continuation.resume("Error: ${e.message}")
@@ -182,9 +181,7 @@ class GeminiProvider : LlmProvider {
         when (msg.role) {
             MessageRole.User -> {
                 put("role", "user")
-                putJsonArray("parts") {
-                    addJsonObject { put("text", msg.content) }
-                }
+                putJsonArray("parts") { addJsonObject { put("text", msg.content) } }
             }
             MessageRole.Assistant -> {
                 put("role", "model")
@@ -209,9 +206,7 @@ class GeminiProvider : LlmProvider {
                         addJsonObject {
                             putJsonObject("functionResponse") {
                                 put("name", tr.toolName)
-                                putJsonObject("response") {
-                                    put("output", tr.output)
-                                }
+                                putJsonObject("response") { put("output", tr.output) }
                             }
                         }
                     }

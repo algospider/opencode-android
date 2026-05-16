@@ -8,7 +8,7 @@ import com.opencode.android.model.ToolDef
 import kotlinx.coroutines.flow.Flow
 
 interface LlmProvider {
-    suspend fun stream(
+    fun stream(
         messages: List<Message>,
         tools: List<ToolDef>,
         config: LlmConfig,
@@ -31,6 +31,7 @@ interface LlmProvider {
             ProviderType.Cloudflare,
             ProviderType.Custom -> OpenAiProvider()
             ProviderType.Anthropic -> AnthropicProvider()
+            ProviderType.DeepSeek -> OpenAiProvider()
         }
     }
 }

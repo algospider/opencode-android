@@ -47,13 +47,13 @@ class PermissionSystem {
         var i = 0
         while (i < pattern.length) {
             when (pattern[i]) {
-                '*' -> regexBuilder.append(".*")
-                '?' -> regexBuilder.append(".")
-                else -> regexBuilder.append(Regex.escape(pattern[i].toString()))
+                '*' -> regex.append(".*")
+                '?' -> regex.append(".")
+                else -> regex.append(Regex.escape(pattern[i].toString()))
             }
             i++
         }
-        regexBuilder.append("$")
+        regex.append("$")
         return Regex(regex.toString()).matches(input)
     }
 

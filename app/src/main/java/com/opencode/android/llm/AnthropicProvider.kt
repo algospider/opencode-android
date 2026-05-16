@@ -3,7 +3,7 @@ package com.opencode.android.llm
 import com.opencode.android.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.*
@@ -29,16 +29,14 @@ class AnthropicProvider : LlmProvider {
         tools: List<ToolDef>,
         config: LlmConfig,
         systemPrompt: String
-    ): Flow<StreamEvent.Type> = flow {
+    ): Flow<StreamEvent.Type> = callbackFlow {
         val requestBody = buildJsonObject {
             put("model", config.model)
             put("max_tokens", config.maxTokens)
             put("stream", true)
 
             if (systemPrompt.isNotBlank()) {
-                putJsonArray("system") {
-                    addJsonObject { put("type", "text"); put("text", systemPrompt) }
-                }
+                putJsonArray("system") { addJsonObject { put("type", "text"); put("text", systemPrompt) } }
             }
 
             putJsonArray("messages") {
@@ -46,9 +44,7 @@ class AnthropicProvider : LlmProvider {
                     when (msg.role) {
                         MessageRole.User -> addJsonObject {
                             put("role", "user")
-                            putJsonArray("content") {
-                                addJsonObject { put("type", "text"); put("text", msg.content) }
-                            }
+                            putJsonArray("content") { addJsonObject { put("type", "text"); put("text", msg.content) } }
                         }
                         MessageRole.Assistant -> addJsonObject {
                             put("role", "assistant")
@@ -58,10 +54,8 @@ class AnthropicProvider : LlmProvider {
                                 }
                                 msg.toolCalls.forEach { tc ->
                                     addJsonObject {
-                                        put("type", "tool_use")
-                                        put("id", tc.id)
-                                        put("name", tc.toolName)
-                                        put("input", json.parseToJsonElement(tc.arguments))
+                                        put("type", "tool_use"); put("id", tc.id)
+                                        put("name", tc.toolName); put("input", json.parseToJsonElement(tc.arguments))
                                     }
                                 }
                             }
@@ -70,11 +64,7 @@ class AnthropicProvider : LlmProvider {
                             put("role", "user")
                             putJsonArray("content") {
                                 msg.toolResults.forEach { tr ->
-                                    addJsonObject {
-                                        put("type", "tool_result")
-                                        put("tool_use_id", tr.toolCallId)
-                                        put("content", tr.output)
-                                    }
+                                    addJsonObject { put("type", "tool_result"); put("tool_use_id", tr.toolCallId); put("content", tr.output) }
                                 }
                             }
                         }
@@ -87,8 +77,7 @@ class AnthropicProvider : LlmProvider {
                 putJsonArray("tools") {
                     tools.forEach { tool ->
                         addJsonObject {
-                            put("name", tool.id)
-                            put("description", tool.description)
+                            put("name", tool.id); put("description", tool.description)
                             put("input_schema", tool.parameters)
                         }
                     }
@@ -103,8 +92,6 @@ class AnthropicProvider : LlmProvider {
             .addHeader("Content-Type", "application/json")
             .post(requestBody.toString().toRequestBody(mediaType))
             .build()
-
-        val textContent = StringBuilder()
 
         EventSources.createFactory(client).newEventSource(request, object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
@@ -122,7 +109,7 @@ class AnthropicProvider : LlmProvider {
                                         toolName = block["name"]?.jsonPrimitive?.contentOrNull ?: "",
                                         arguments = ""
                                     )
-                                    trySendBlocking(StreamEvent.Type.ToolCallStart(toolCall))
+                                    trySend(StreamEvent.Type.ToolCallStart(toolCall))
                                 }
                             }
                         }
@@ -131,42 +118,38 @@ class AnthropicProvider : LlmProvider {
                             when (delta["type"]?.jsonPrimitive?.contentOrNull) {
                                 "text_delta" -> {
                                     val text = delta["text"]?.jsonPrimitive?.contentOrNull ?: ""
-                                    textContent.append(text)
-                                    trySendBlocking(StreamEvent.Type.TextDelta(text))
+                                    trySend(StreamEvent.Type.TextDelta(text))
                                 }
                                 "input_json_delta" -> {
                                     val partial = delta["partial_json"]?.jsonPrimitive?.contentOrNull ?: ""
-                                    trySendBlocking(StreamEvent.Type.ToolCallDelta("", partial))
+                                    trySend(StreamEvent.Type.ToolCallDelta("", partial))
                                 }
                                 "thinking_delta" -> {
                                     val text = delta["thinking"]?.jsonPrimitive?.contentOrNull ?: ""
-                                    trySendBlocking(StreamEvent.Type.ReasoningDelta(text))
+                                    trySend(StreamEvent.Type.ReasoningDelta(text))
                                 }
                             }
                         }
-                        "content_block_stop" -> {
-                            // tool call accumulates via separate event
-                        }
-                        "message_delta" -> {
-                            val stopReason = parsed["delta"]?.jsonObject?.get("stop_reason")?.jsonPrimitive?.contentOrNull
-                            // handle tool_use stop reason
-                        }
                         "message_stop" -> {
-                            trySendBlocking(StreamEvent.Type.Finish("stop"))
+                            trySend(StreamEvent.Type.Finish("stop"))
                         }
                     }
                 } catch (_: Exception) { }
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                trySendBlocking(StreamEvent.Type.Error(t?.message ?: "Anthropic stream failed"))
-                trySendBlocking(StreamEvent.Type.Finish("error"))
+                trySend(StreamEvent.Type.Error(t?.message ?: "Anthropic stream failed"))
+                trySend(StreamEvent.Type.Finish("error"))
+                channel.close()
             }
 
             override fun onClosed(eventSource: EventSource) {
-                trySendBlocking(StreamEvent.Type.Finish("stop"))
+                trySend(StreamEvent.Type.Finish("stop"))
+                channel.close()
             }
         })
+
+        awaitClose { }
     }.flowOn(Dispatchers.IO)
 
     override suspend fun chat(
@@ -189,10 +172,7 @@ class AnthropicProvider : LlmProvider {
                             put("role", "user")
                             putJsonArray("content") { addJsonObject { put("type", "text"); put("text", msg.content) } }
                         }
-                        MessageRole.Assistant -> addJsonObject {
-                            put("role", "assistant")
-                            put("content", msg.content)
-                        }
+                        MessageRole.Assistant -> addJsonObject { put("role", "assistant"); put("content", msg.content) }
                         MessageRole.Tool -> addJsonObject {
                             put("role", "user")
                             putJsonArray("content") {
@@ -214,7 +194,7 @@ class AnthropicProvider : LlmProvider {
             .post(requestBody.toString().toRequestBody(mediaType))
             .build()
 
-        return suspendCancellableCoroutine { continuation ->
+        return suspendCancellableCoroutine<String> { continuation ->
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: java.io.IOException) {
                     continuation.resume("Error: ${e.message}")

@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.opencode.android.tool
 
 import com.opencode.android.model.ExecuteResult

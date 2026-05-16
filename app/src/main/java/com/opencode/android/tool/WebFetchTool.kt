@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+
 package com.opencode.android.tool
 
 import com.opencode.android.model.ExecuteResult
@@ -31,7 +33,7 @@ The response is converted to markdown by default for easy reading."""
             }
             putJsonObject("format") {
                 put("type", "string")
-                put("enum", "[\"text\",\"markdown\",\"html\"]".let { Json.parseToJsonElement(it) })
+                putJsonArray("enum") { add("text"); add("markdown"); add("html") }
                 put("description", "Output format (text, markdown, or html)")
             }
             putJsonObject("timeout") {

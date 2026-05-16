@@ -5,6 +5,7 @@ import com.opencode.android.model.ToolContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.*
 
 data class QuestionRequest(
@@ -93,18 +94,12 @@ You can present options with descriptions and allow single or multiple selection
 
         _requests.emit(request)
 
-        // Wait for user response
-        _responses.collect { response ->
-            if (response.id == requestId) {
-                val answers = response.answers
-                if (answers.isEmpty()) {
-                    return ExecuteResult("User cancelled", "User chose not to answer")
-                }
-                return ExecuteResult("User answered", answers.joinToString("\n"))
-            }
+        val response = _responses.first { it.id == requestId }
+        return if (response.answers.isEmpty()) {
+            ExecuteResult("User cancelled", "User chose not to answer")
+        } else {
+            ExecuteResult("User answered", response.answers.joinToString("\n"))
         }
-
-        return ExecuteResult("No answer", "No response received", isError = true)
     }
 
     suspend fun submitResponse(response: QuestionResponse) {

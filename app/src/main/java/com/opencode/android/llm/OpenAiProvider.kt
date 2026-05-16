@@ -3,7 +3,7 @@ package com.opencode.android.llm
 import com.opencode.android.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.*
@@ -29,7 +29,7 @@ class OpenAiProvider : LlmProvider {
         tools: List<ToolDef>,
         config: LlmConfig,
         systemPrompt: String
-    ): Flow<StreamEvent.Type> = flow {
+    ): Flow<StreamEvent.Type> = callbackFlow {
         val requestBody = buildJsonObject {
             put("model", config.model)
             put("temperature", config.temperature)
@@ -38,32 +38,22 @@ class OpenAiProvider : LlmProvider {
 
             putJsonArray("messages") {
                 if (systemPrompt.isNotBlank()) {
-                    addJsonObject {
-                        put("role", "system")
-                        put("content", systemPrompt)
-                    }
+                    addJsonObject { put("role", "system"); put("content", systemPrompt) }
                 }
                 messages.forEach { msg ->
                     when (msg.role) {
-                        MessageRole.System -> addJsonObject {
-                            put("role", "system"); put("content", msg.content)
-                        }
-                        MessageRole.User -> addJsonObject {
-                            put("role", "user"); put("content", msg.content)
-                        }
+                        MessageRole.System -> addJsonObject { put("role", "system"); put("content", msg.content) }
+                        MessageRole.User -> addJsonObject { put("role", "user"); put("content", msg.content) }
                         MessageRole.Assistant -> {
                             addJsonObject {
-                                put("role", "assistant")
-                                put("content", msg.content)
+                                put("role", "assistant"); put("content", msg.content)
                                 if (msg.toolCalls.isNotEmpty()) {
                                     putJsonArray("tool_calls") {
                                         msg.toolCalls.forEach { tc ->
                                             addJsonObject {
-                                                put("id", tc.id)
-                                                put("type", "function")
+                                                put("id", tc.id); put("type", "function")
                                                 putJsonObject("function") {
-                                                    put("name", tc.toolName)
-                                                    put("arguments", tc.arguments)
+                                                    put("name", tc.toolName); put("arguments", tc.arguments)
                                                 }
                                             }
                                         }
@@ -86,8 +76,7 @@ class OpenAiProvider : LlmProvider {
                         addJsonObject {
                             put("type", "function")
                             putJsonObject("function") {
-                                put("name", tool.id)
-                                put("description", tool.description)
+                                put("name", tool.id); put("description", tool.description)
                                 put("parameters", tool.parameters)
                             }
                         }
@@ -103,87 +92,86 @@ class OpenAiProvider : LlmProvider {
             .post(requestBody.toString().toRequestBody(mediaType))
             .build()
 
-        val result = suspendCancellableCoroutine<JsonElement> { continuation ->
-            val listener = object : EventSourceListener() {
-                private val textBuilder = StringBuilder()
-                private var currentToolCall: ToolCallBuilder? = null
-                private val toolCallBuilders = mutableMapOf<String, ToolCallBuilder>()
+        val textBuilder = StringBuilder()
+        var currentToolCall: ToolCallBuilder? = null
+        val toolCallBuilders = mutableMapOf<String, ToolCallBuilder>()
 
-                override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                    if (data == "[DONE]") return
-                    try {
-                        val parsed = json.parseToJsonElement(data).jsonObject
-                        val choices = parsed["choices"]?.jsonArray
-                        val delta = choices?.firstOrNull()?.jsonObject?.get("delta")?.jsonObject ?: return
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                if (data == "[DONE]") return
+                try {
+                    val parsed = json.parseToJsonElement(data).jsonObject
+                    val choices = parsed["choices"]?.jsonArray
+                    val delta = choices?.firstOrNull()?.jsonObject?.get("delta")?.jsonObject ?: return
 
-                        delta["content"]?.jsonPrimitive?.contentOrNull?.let { text ->
-                            textBuilder.append(text)
-                            trySendBlocking(StreamEvent.Type.TextDelta(text))
+                    delta["content"]?.jsonPrimitive?.contentOrNull?.let { text ->
+                        textBuilder.append(text)
+                        trySend(StreamEvent.Type.TextDelta(text))
+                    }
+
+                    delta["reasoning_content"]?.jsonPrimitive?.contentOrNull?.let { text ->
+                        trySend(StreamEvent.Type.ReasoningDelta(text))
+                    }
+
+                    delta["tool_calls"]?.jsonArray?.forEach { tcElement ->
+                        val tc = tcElement.jsonObject
+                        val id = tc["id"]?.jsonPrimitive?.contentOrNull
+                        val index = tc["index"]?.jsonPrimitive?.int ?: 0
+                        val function = tc["function"]?.jsonObject
+
+                        if (id != null && currentToolCall?.id != id) {
+                            currentToolCall?.let { finishToolCall(it) }
+                            currentToolCall = ToolCallBuilder(id = id, toolName = function?.get("name")?.jsonPrimitive?.contentOrNull ?: "")
+                            toolCallBuilders[id] = currentToolCall!!
+                            trySend(StreamEvent.Type.ToolCallStart(
+                                ToolCall(id, currentToolCall!!.toolName, "")
+                            ))
                         }
 
-                        delta["reasoning_content"]?.jsonPrimitive?.contentOrNull?.let { text ->
-                            trySendBlocking(StreamEvent.Type.ReasoningDelta(text))
-                        }
-
-                        delta["tool_calls"]?.jsonArray?.forEach { tcElement ->
-                            val tc = tcElement.jsonObject
-                            val id = tc["id"]?.jsonPrimitive?.contentOrNull
-                            val index = tc["index"]?.jsonPrimitive?.int ?: 0
-                            val function = tc["function"]?.jsonObject
-
-                            if (id != null && currentToolCall?.id != id) {
-                                currentToolCall?.let { finishToolCall(it) }
-                                currentToolCall = ToolCallBuilder(id = id, toolName = function?.get("name")?.jsonPrimitive?.contentOrNull ?: "")
-                                toolCallBuilders[id] = currentToolCall!!
-                                trySendBlocking(StreamEvent.Type.ToolCallStart(
-                                    ToolCall(id, currentToolCall!!.toolName, "")
-                                ))
-                            }
-
-                            function?.get("arguments")?.jsonPrimitive?.contentOrNull?.let { arg ->
-                                currentToolCall?.let { builder ->
-                                    builder.arguments.append(arg)
-                                    trySendBlocking(StreamEvent.Type.ToolCallDelta(id ?: "", arg))
-                                }
-                            }
-
-                            val finishReason = choices.firstOrNull()?.jsonObject?.get("finish_reason")?.jsonPrimitive?.contentOrNull
-                            if (finishReason == "tool_calls") {
-                                finishAllToolCalls()
+                        function?.get("arguments")?.jsonPrimitive?.contentOrNull?.let { arg ->
+                            currentToolCall?.let { builder ->
+                                builder.arguments.append(arg)
+                                trySend(StreamEvent.Type.ToolCallDelta(id ?: "", arg))
                             }
                         }
 
-                    } catch (_: Exception) { }
-                }
-
-                override fun onClosed(eventSource: EventSource) {
-                    finishAllToolCalls()
-                    continuation.resume(JsonPrimitive(textBuilder.toString()))
-                }
-
-                override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                    val errorMsg = t?.message ?: response?.body?.string() ?: "Unknown error"
-                    trySendBlocking(StreamEvent.Type.Error(errorMsg))
-                    continuation.resume(JsonPrimitive(textBuilder.toString()))
-                }
-
-                private fun finishToolCall(builder: ToolCallBuilder) {
-                    trySendBlocking(StreamEvent.Type.ToolCallEnd(
-                        ToolCall(builder.id, builder.toolName, builder.arguments.toString())
-                    ))
-                }
-
-                private fun finishAllToolCalls() {
-                    toolCallBuilders.values.forEach { finishToolCall(it) }
-                    toolCallBuilders.clear()
-                    currentToolCall = null
-                }
+                        val finishReason = choices.firstOrNull()?.jsonObject?.get("finish_reason")?.jsonPrimitive?.contentOrNull
+                        if (finishReason == "tool_calls") {
+                            finishAllToolCalls()
+                        }
+                    }
+                } catch (_: Exception) { }
             }
 
-            EventSources.createFactory(client).newEventSource(request, listener)
+            override fun onClosed(eventSource: EventSource) {
+                finishAllToolCalls()
+                trySend(StreamEvent.Type.Finish("stop"))
+                channel.close()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                val errorMsg = t?.message ?: response?.body?.string() ?: "Unknown error"
+                trySend(StreamEvent.Type.Error(errorMsg))
+                trySend(StreamEvent.Type.Finish("error"))
+                channel.close()
+            }
+
+            private fun finishToolCall(builder: ToolCallBuilder) {
+                trySend(StreamEvent.Type.ToolCallEnd(
+                    ToolCall(builder.id, builder.toolName, builder.arguments.toString())
+                ))
+            }
+
+            private fun finishAllToolCalls() {
+                toolCallBuilders.values.forEach { finishToolCall(it) }
+                toolCallBuilders.clear()
+                currentToolCall = null
+            }
         }
 
-        emit(StreamEvent.Type.Finish("stop"))
+        EventSources.createFactory(client).newEventSource(request, listener)
+
+        awaitClose { }
     }.flowOn(Dispatchers.IO)
 
     override suspend fun chat(
@@ -218,7 +206,7 @@ class OpenAiProvider : LlmProvider {
             .post(requestBody.toString().toRequestBody(mediaType))
             .build()
 
-        return suspendCancellableCoroutine { continuation ->
+        return suspendCancellableCoroutine<String> { continuation ->
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: java.io.IOException) {
                     continuation.resume("Error: ${e.message}")
