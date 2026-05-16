@@ -1,0 +1,162 @@
+name: Build OpenCode for Android
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - '.github/**'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+env:
+  GRADLE_VERSION: "8.11.1"
+  JAVA_VERSION: "17"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Gradle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Generate wrapper
+        run: gradle wrapper --gradle-version=${{ env.GRADLE_VERSION }}
+      - name: Validate Gradle project
+        run: |
+          chmod +x gradlew
+          ./gradlew projects --no-daemon
+
+  lint:
+    name: Lint Check
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Generate wrapper
+        run: gradle wrapper --gradle-version=${{ env.GRADLE_VERSION }}
+      - name: Run lint
+        run: |
+          chmod +x gradlew
+          ./gradlew lint --no-daemon
+      - name: Upload lint report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results*.html
+          retention-days: 14
+
+  build:
+    name: Build APK
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build-type: [debug, release]
+      max-parallel: 2
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version=${{ env.GRADLE_VERSION }}
+
+      - name: Build ${{ matrix.build-type }} APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assemble${{ matrix.build-type == 'release' && 'Release' || 'Debug' }} --stacktrace --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-android-${{ matrix.build-type }}
+          path: app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build summary
+        run: |
+          echo "## Build ${{ matrix.build-type }} ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### APK files:" >> $GITHUB_STEP_SUMMARY
+          find app/build/outputs -name "*.apk" -exec echo "- {}" \; >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Unit Tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+      - name: Generate wrapper
+        run: gradle wrapper --gradle-version=${{ env.GRADLE_VERSION }}
+      - name: Run unit tests
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-report
+          path: app/build/reports/tests/**/*
+          retention-days: 14
+      - name: Test summary
+        run: |
+          echo "## Unit Tests ✅" >> $GITHUB_STEP_SUMMARY
+          echo "Tests completed successfully." >> $GITHUB_STEP_SUMMARY
